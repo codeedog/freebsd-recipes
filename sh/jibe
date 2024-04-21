@@ -49,7 +49,7 @@ FAILURE=1
 usage()
 {
     echo "$pgm <pre|bind|del> if_desc1[ if_desc2 [ if_desc3 ...]]"
-    echo "  if_desc# := e#<a|b>[_name][,dhcp|inet <IPv4/CIDR>][,<a|b>/<bridge_name>][,<mac_address>]"
+    echo "  if_desc# := e#<a|b>[_name][,dhcp|inet <IPv4/CIDR>][,b/<bridge_name>][,<mac_address>][,d[=<IPv4|if>]]"
     echo "From: '$1' $2"
     exit $FAILURE
 }
