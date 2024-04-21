@@ -1,0 +1,267 @@
+#! /bin/sh
+#-
+# Copyright (c) 2024 Andrew Philips
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+# FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+# COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+# BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+# ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+#
+
+PATH=/bin/:/usr/bin     # set a safe path
+#LOCK=/tmp/blah_lock.$$  # $$ is the PID of the shell
+
+unset CMD jail_d template_d skeleton_d release_d CONTINUE LOCK jail_nm jails t_or_r
+
+CMD=$0
+jail_d="/jails"
+DEFAULT_CONTAINER_D="containers"
+#DEFAULT_TEMPLATE_D="/.jail/template"
+DEFAULT_TEMPLATE_D="/"
+DEFAULT_SKELETON_D="/.jail/skeleton/"
+CHILD_J_DEVFS=11
+
+
+parent_j=""
+parent_x=""
+child_j=$CHILD_J_DEVFS
+
+
+# Usage Information
+usage()
+{
+    echo "$CMD -[jtpc]h jailname [jailname2 [jailname3...]]"
+    echo "Create one or more thin jails from a template"
+    echo "-j <dir>	target directory for jail structure"
+    echo "-t <dir>	template directory for thin jail"
+    echo "-p <num>	add parent jail permissions for num children"
+    echo "-c		declare this a child (has parent jail)"
+    echo "-h		usage"
+    exit -1
+}
+
+
+#Interactive cmd: ask user to continue or stop
+ask_to_continue()
+{
+    printf "\nDo you want to continue ? [y|N] "
+    read CONTINUE
+    if [ "x${CONTINUE}" != "xy" ] && [ "x${CONTINUE}" != "xY" ] ; then
+        echo "Skipping jails: $jails" # ; rm -f $LOCK;
+	exit 1
+    else
+        echo "Continuing..."
+    fi
+}
+
+
+# Check we have a legit directory (and template?)
+check_template()
+{
+    template_d=$(echo "$template_d" | sed "s/\(.*\)\/$/\1\//")
+    if [ ! -d $template_d ]; then
+	echo "Bad Template: '$template_d'"
+	usage
+    fi
+}
+
+
+# Process any command line options
+cmdline_options()
+{
+    while getopts "j:t:p:ch" opt ; do
+	case $opt in
+            h ) usage ;;
+            j ) jail_d=$OPTARG;;
+	    t ) template_d=$OPTARG;;
+	    c ) child_j="0";;
+	    p ) parent_x=$OPTARG
+parent_j="  # PERMISSIONS, PARENT 
+  allow.mount;
+  allow.mount.devfs;
+  allow.mount.nullfs;
+  enforce_statfs=1;
+  children.max=$parent_x;
+";;
+            ? ) echo "An invalid option was encountered."; echo; usage ;;
+            * ) echo "An unexpected error occured."; echo; usage ;;
+	esac
+    done
+    shift `expr $OPTIND - 1`
+    retval="$@"
+}
+
+
+# Parameter Checks & Config Setup
+validate_jail_configuration()
+{
+
+    # Validate JAIL directory
+    jail_d=$(echo "$jail_d" | sed "s/\(.*\)\/$/\1/")
+    if [ ! -d $jail_d ]; then
+	echo "Bad Jail Directory: '$jail_d'"
+	usage
+    fi
+
+    # Jails go in here
+    containers_d="$jail_d" # "$jail_d/$DEFAULT_CONTAINER_D"
+
+    # Validate -t option
+    if [ "_$template_d" = "_" ]; then
+	template_d="$DEFAULT_TEMPLATE_D"
+	skeleton_d="$DEFAULT_SKELETON_D"
+	check_template
+    else
+	check_template
+	skeleton_d=$template_d
+    fi
+}
+
+
+# Create a jail using the name in $1
+create_thin_jail()
+{
+    if [ -d $containers_d/$1 ]; then
+	echo "ERROR: Jail directory already exists: $containers_d/$1"
+	exit -1
+    fi
+
+    # Display Jail set up data
+    printf "\nCreate Jail\n"
+    echo "name    : $1"
+    echo "template: $template_d"
+    echo "skeleton: $skeleton_d"
+    echo "target  : $containers_d/$1"
+    if [ "_$parent_x" != "_" ]; then
+        echo "parent:  childmax=$parent_x"
+    fi
+    if [ "_$child_j" != "_$CHILD_J_DEVFS" ]; then
+        echo "child:   true"
+    fi
+    ask_to_continue
+
+    # Build Jail structure
+    echo "Building $1..."
+
+    mkdir -p $containers_d/$1/_j
+    mkdir -p $containers_d/$1/etc
+    mkdir -p $containers_d/$1/home
+    mkdir -p $containers_d/$1/local
+    mkdir -p $containers_d/$1/root
+    mkdir -p $containers_d/$1/tmp
+    mkdir -p $containers_d/$1/var
+    mkdir -p $containers_d/$1/jails
+#    mkdir -p $containers_d/$1/containers
+#    mkdir -p $containers_d/$1/jails/containers
+#    mkdir -p $containers_d/$1/jails/template
+
+    echo "Copying /etc /root /home"
+    cp -Rp $skeleton_d./etc/   $containers_d/$1/etc/
+    cp -Rp $skeleton_d./root/  $containers_d/$1/root/
+    cp -Rp $skeleton_d./home/  $containers_d/$1/home/
+    echo "Copying /var" 
+    cp -Rp $skeleton_d./var/   $containers_d/$1/var/
+
+    echo "Copying /usr/local"
+    if [ -d $skeleton_d./usr/local/ ]; then
+	cp -Rp $skeleton_d./usr/local/ $containers_d/$1/local/
+    elif [ -d $skeleton_d./local/ ]; then
+	cp -Rp $skeleton_d./local/ $containers_d/$1/local/
+    else
+	echo "FAILED: Copying /usr/local $skeleton_d"
+    fi
+
+    echo "Writing configuration files"
+    echo "# Mount template root file system read-only
+$template_d	$containers_d/$1/_j	nullfs ro 0 0
+
+# Mount userspace and common locally configured directories read-write
+$containers_d/$1/etc  	$containers_d/$1/_j/etc      	nullfs rw 0 0
+$containers_d/$1/home 	$containers_d/$1/_j/home     	nullfs rw 0 0
+$containers_d/$1/jails	$containers_d/$1/_j/jails    	nullfs rw 0 0
+$containers_d/$1/local	$containers_d/$1/_j/usr/local	nullfs rw 0 0
+$containers_d/$1/root 	$containers_d/$1/_j/root     	nullfs rw 0 0
+$containers_d/$1/tmp  	$containers_d/$1/_j/tmp      	nullfs rw 0 0
+$containers_d/$1/var  	$containers_d/$1/_j/var      	nullfs rw 0 0
+
+# Hierarchical Jails
+#  - Template configuration is recursive
+#  - Parent jail configurations should not recur
+
+#$containers_d/$1/containers     $containers_d/$1/_j/jails/containers nullfs rw 0 0
+#$jail_d/$DEFAULT_TEMPLATE_D	$containers_d/$1/_j/jails/$DEFAULT_TEMPLATE_D	nullfs ro 0 0
+" > $containers_d/$1/_jail.fstab
+
+
+
+echo "$1 {
+  # STARTUP/LOGGING
+  exec.start = \"/bin/sh /etc/rc\";
+  exec.stop = \"/bin/sh /etc/rc.shutdown\";
+  exec.consolelog = \"/var/tmp/jail_console_\${name}.log\";
+
+  # PERMISSIONS
+  allow.raw_sockets;
+  exec.clean;
+  mount.devfs;
+  devfs_ruleset = $child_j;
+
+$parent_j
+  # MOUNT
+  mount.fstab = \"$containers_d/\${name}/_jail.fstab\";
+
+  # HOSTNAME/PATH
+  host.hostname = \"\${name}\";
+  path = \"$containers_d/\${name}/_j\";
+
+  # NETWORK
+  #   - For SDN configuration options, see /usr/local/sbin/jibe
+  #\$e0 = \"e0b_\${name},dhcp,b=pub_bridge\";
+  \$e0 = \"e0b_\${name},b=brdg_\${name}\";
+
+  vnet;
+  vnet.interface = e0b_\${name};
+  exec.prestart+=\"jibe pre  \$e0\";
+  exec.start   +=\"jibe bind \$e0\";
+  exec.poststop+=\"jibe del  \$e0\";
+}" > /etc/jail.conf.d/$1.conf
+
+}
+
+
+###########################################
+# Create Thin Jail(s)
+
+cmdline_options "$@"
+set $retval
+validate_jail_configuration
+
+# We need at least one Jail name
+if [ $# = 0 ]; then
+    usage
+fi
+
+# Loop through jail names and create thin jails as directed
+while [ "_$1" != "_" ]
+do
+    create_thin_jail $1
+    shift 1
+done

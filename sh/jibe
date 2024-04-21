@@ -1,0 +1,363 @@
+#! /bin/sh
+#-
+# Copyright (c) 2024 Andrew Philips
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+# FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+# COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+# BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+# ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+#
+#
+# This file was heavily influenced by Devin Teske's jib script.
+# See /usr/share/examples/jails/jib for more details
+#
+# Usage:
+#  jibe pre  if_desc1 [if_desc2 [if_desc3 ...]]
+#  jibe bind if_desc1 [if_desc2 [if_desc3 ...]]
+#  jibe del  if_desc1 [if_desc2 [if_desc3 ...]]
+
+
+pgm="${0##*/}" # Program basename
+
+#
+# Global exit status
+#
+SUCCESS=0
+FAILURE=1
+
+############################################################ FUNCTIONS
+
+# Usage Information
+usage()
+{
+    echo "$pgm <pre|bind|del> if_desc1[ if_desc2 [ if_desc3 ...]]"
+    echo "  if_desc# := e#<a|b>[_name][,dhcp|inet <IPv4/CIDR>][,<a|b>/<bridge_name>][,<mac_address>]"
+    echo "From: '$1' $2"
+    exit $FAILURE
+}
+
+action_usage()
+{
+	local usage descr action="$1"
+	eval usage=\"\$jibe_${action}_usage\"
+	echo "Usage: $pgm $usage" >&2
+	eval descr=\"\$jibe_${action}_descr\"
+	printf "\t%s\n" "$descr"
+	exit $FAILURE
+}
+
+_usage_()
+{
+	local action usage descr
+	exec >&2
+	echo "Usage: $pgm action [arguments]"
+	echo "Actions:"
+	for action in \
+		addm		\
+		show		\
+		show1		\
+		destroy		\
+	; do
+		eval usage=\"\$jibe_${action}_usage\"
+		[ "$usage" ] || continue
+		eval descr=\"\$jibe_${action}_descr\"
+		printf "\t%s\n\t\t%s\n" "$usage" "$descr"
+	done
+	exit $FAILURE
+}
+
+derive_mac()
+{
+    # The safest thing to do is to supply a unique MAC Address
+    # Feeling lazy? Use this, but you may have collisions as it
+    # is not as robust as jib::derive_mac. However, it also
+    # does not require an underlying hardware interface, the
+    # primary reason (jib requirement) this file was written.
+    
+    local y=2
+    local x=$(echo "$name" | md5 | sed "s/^\(.\)\(..\)\(..\)\(..\)\(..\).*$/\1$y:\2:\3:\4:\5/")
+    #echo "${x:0:1}2:${x:2:2}:${x:4:2}:${x:6:2}:${x:8:2}"
+    echo $x
+}
+
+process_name()
+{
+    local arg match
+
+    echo "ARG: $arg"
+    set -- $arg
+    num=$1
+    side=$2
+    sufx=$3
+    if [ $side = "a" ]; then
+	oppo="b"
+    else
+	[ $side = "b" ] || usage
+	oppo="a"
+    fi
+    oname="e$num$oppo$sufx"
+}
+
+
+process_conf()
+{
+    local arg match
+
+    arg=$1
+
+    # Match: DHCP             (dhcp)
+    if [ $arg = "dhcp" ]; then
+	inet=$arg
+	echo "  inet  : $inet"
+	return
+    fi
+
+    # Match: IP Address/CIDR  (#.#.#.#/#)
+    match=$(echo $arg | sed -n "s/^\(\(\([0-9]\{1,3\}\.\)\{3\}\)\([0-9]\{1,3\}\)\/[0-9]\{1,\}\)\$/\1/p")
+    if [ "_$match" != "_" ]; then
+	inet=$(echo $match | sed -n "s/\// /p")
+	set -- $inet
+	inet=$1
+	cidr=$2
+	echo "  inet  : $inet, $cidr"
+
+    	# Set IP for CIDR=31 remote epair
+    	if [ "$cidr" = "31" ]; then
+	    local d=$(echo $inet | sed -n "s/^.*\(.\)\$/\1/p")
+	    oinet=$(echo $inet | sed -n "s/^\(.*\).\$/\1$(( $d ^ 1 ))/p")
+	    echo "  oinet : $oinet"
+    	fi
+
+	return
+    fi
+
+    # Match: MAC Address      (##:##:##:##:##:0<a|b>)
+    match=$(echo $arg | sed -n "s/^\(\([0-9a-f]\{2\}:\)\{5\}\)\(..\)\$/\1\3/p")
+    if [ "_$match" != "_" ]; then
+	ether=${match%???}
+	echo "  ether : $ether"
+	return
+    fi
+
+    # Match: Bridge           (b=<bridge_name>)
+    match=$(echo $arg | sed -n "s/^b=\(.\{1,\}\)\$/\1/p")
+    if [ "_$match" != "_" ]; then
+	bridge=$match
+	echo "  bridge: $bridge"
+	return
+    fi
+
+    # Match: Default Route    (d[=<IP|interface_name>])
+    match=$(echo $arg | sed -n "s/^d=\(.\{1,\}\)\$/\1/p")
+    if [ $arg = "d" ]; then
+	defroute=" EMPTY " #$name
+	echo "  def rt: $defroute"
+	return
+    elif [ "_$match" != "_" ]; then
+	defroute=$match
+	echo "  def rt: $defroute"
+	return
+    fi
+
+    usage "process_conf.1" $arg
+}
+
+
+process_if()
+{
+    local arg match
+    unset name oname num side oppo sufx inet cidr oinet ether bridge defroute
+
+    # Match interface descriptor: e#<a|b>[_name]
+    name="$1"
+    arg=$(echo "$name" | sed -n "s/^e\([[:digit:]]\{1,\}\)\([ab]\{1\}\)\(\(_.\{1,\}\)\{0,1\}\)\$/\1 \2 \3/p")
+    if [ "_$arg" = "_" ]; then
+	usage "process_if.1"
+    fi
+    process_name $arg
+    echo "  if    : $num, $side, $oppo, $sufx, $oname"
+    shift 1
+
+    while [ "_$1" != "_" ]
+    do
+	process_conf $1
+	shift 1
+    done
+}
+
+
+jibe_pre_usage="pre ..."
+jibe_pre_descr="..."
+jibe_pre()
+{
+    local desc
+
+    echo "PRE $1"
+    process_if $@
+
+    # Make sure the interface doesn't exist already
+    if ifconfig "$name" > /dev/null 2>&1; then
+	echo "  Existing: $name"
+	return
+    fi
+
+    # Create bridge if is doesn't exist
+    if [ "_$bridge" != "_" ]; then
+	if ifconfig "$bridge" > /dev/null 2>&1; then
+	    desc="$bridge"
+	elif ifconfig bridge create up name "$bridge" > /dev/null 2>&1; then
+	    desc="$bridge"
+	fi
+    elif [ "$cidr" = "31" ]; then
+	desc="wire"
+    fi
+    [ "_$desc" != "_" ] &&  echo "DESCRIPTION: $desc"
+
+    # Create a new interface to the bridge
+    echo "  new=\$( ifconfig epair create ) || return"
+    new=$( ifconfig epair create ) || return
+
+    # Rename the new interface
+    echo "  ifconfig $new name e${num}a$sufx description $desc || return"
+    echo "  ifconfig ${new%a}b name e${num}b$sufx || return"
+    echo "  ifconfig $name up || return"
+    echo "  ifconfig $oname up || return"
+    ifconfig $new name "e${num}a$sufx" description "$desc" || return
+    ifconfig ${new%a}b name "e${num}b$sufx" || return
+    ifconfig "$name" up || return
+    ifconfig "$oname" up || return
+
+    # Add Opposite epair interface to bridge
+    if [ "_$bridge" != "_" ]; then
+	echo "  ifconfig $bridge addm $oname up"
+	ifconfig "$bridge" addm "$oname" up
+    fi
+
+    # If DHCP and !ether, generate ether addresses
+    if [ "$inet" = "dhcp" -a "_$ether" = "_" ]; then
+	ether=$(derive_mac)
+    fi
+
+    # Set MAC Addresses
+    if [ "_$ether" != "_" ]; then
+	echo "  ifconfig $name ether ${ether}:0$side up"
+	ifconfig "$name"  ether "${ether}:0$side" up
+	echo "  ifconfig $oname ether ${ether}:0$oppo up"
+	ifconfig "$oname" ether "${ether}:0$oppo" up
+    fi
+
+    # Set IP for CIDR=31 remote epair
+    if [ "$cidr" = "31" ]; then
+	echo "  ifconfig $oname inet $oinet/$cidr up"
+	ifconfig "$oname" inet "$oinet/$cidr" up
+    fi
+
+    echo "  PRE completed"
+}
+
+
+jibe_bind_usage="bind ..."
+jibe_bind_descr="..."
+jibe_bind()
+{
+    echo "BIND $1"
+    echo "  $@"
+    process_if $@
+
+    # Fetch IP via DHCP of Set IP/CIDR directly
+    if [ "$inet" = "dhcp" ]; then
+	echo "  dhclient $name"
+	dhclient $name || echo "  DHCP failed: $name"
+    elif [ "_$cidr" != "_" ]; then
+	echo "  ifconfig $name inet $inet/$cidr up"
+	ifconfig "$name" inet "$inet/$cidr" up || echo "  IP/CIDR Failed: $name $inet/$cidr"
+    fi
+
+    # Set default route to IP or interface
+    if [ "_$defroute" != "_" ]; then
+	local dfr=$defroute
+	if [ "$dfr" = " EMPTY " ]; then
+	    if [ "$cidr" = "31" ]; then
+		dfr=$oinet
+	    else
+		dfr=$name
+	    fi
+	fi
+	if ifconfig "$dfr" > /dev/null 2>&1; then
+	    echo "  route add default -iface $dfr"
+	    route add default -iface "$dfr" || echo "  Route add failed: -iface $dfr"
+	else
+	    echo "  route add default $dfr"
+	    route add default "$dfr" || echo "  Route add failed: $dfr"
+	fi
+    fi
+
+    echo "  BIND completed"
+}
+
+
+jibe_del_usage="del ..."
+jibe_del_descr="..."
+jibe_del()
+{
+    echo "DEL  $1"
+    process_if $@
+
+    # Destroy created epairs
+    echo "  ifconfig \"$name\" destroy > /dev/null 2>&1"
+    ifconfig "$name" destroy > /dev/null 2>&1
+    echo "  ifconfig \"$oname\" destroy > /dev/null 2>&1"
+    ifconfig "$oname" destroy > /dev/null 2>&1
+}
+
+
+#
+# Command-line arguments
+#
+action="$1"
+[ "$action" ] || usage "script.1" # NOTREACHED
+
+#
+# Validate action argument
+#
+if [ "$BASH_VERSION" ]; then
+    echo "BASH"
+    type="$( type -t "jibe_$action" )" || usage "script.2" # NOTREACHED
+else
+    echo "!BASH"
+    type="$( type "jibe_$action" 2> /dev/null )" || usage "script.3" # NOTREACHED
+fi
+case "$type" in
+*function)
+    shift 1 # action
+    # Loop through jibe configurations
+    while [ "_$1" != "_" ]
+    do
+	arg1=$(echo $1 | sed "s/,/ /g")
+	eval "jibe_$action" \"\$arg1\"
+	shift 1
+    done
+    ;;
+*) usage "script.4" # NOTREACHED
+esac
+
+
+exit $SUCCESS
