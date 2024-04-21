@@ -26,15 +26,16 @@
 # POSSIBILITY OF SUCH DAMAGE.
 #
 
+# To create an initial base for all thin jails:
+# $ thinjail -j /.jail -t / skeleton
+
 PATH=/bin/:/usr/bin     # set a safe path
-#LOCK=/tmp/blah_lock.$$  # $$ is the PID of the shell
 
 unset CMD jail_d template_d skeleton_d release_d CONTINUE LOCK jail_nm jails t_or_r
 
 CMD=$0
 jail_d="/jails"
 DEFAULT_CONTAINER_D="containers"
-#DEFAULT_TEMPLATE_D="/.jail/template"
 DEFAULT_TEMPLATE_D="/"
 DEFAULT_SKELETON_D="/.jail/skeleton/"
 CHILD_J_DEVFS=11
