@@ -202,13 +202,6 @@ $containers_d/$1/local	$containers_d/$1/_j/usr/local	nullfs rw 0 0
 $containers_d/$1/root 	$containers_d/$1/_j/root     	nullfs rw 0 0
 $containers_d/$1/tmp  	$containers_d/$1/_j/tmp      	nullfs rw 0 0
 $containers_d/$1/var  	$containers_d/$1/_j/var      	nullfs rw 0 0
-
-# Hierarchical Jails
-#  - Template configuration is recursive
-#  - Parent jail configurations should not recur
-
-#$containers_d/$1/containers     $containers_d/$1/_j/jails/containers nullfs rw 0 0
-#$jail_d/$DEFAULT_TEMPLATE_D	$containers_d/$1/_j/jails/$DEFAULT_TEMPLATE_D	nullfs ro 0 0
 " > $containers_d/$1/_jail.fstab
 
 
