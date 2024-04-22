@@ -170,9 +170,6 @@ create_thin_jail()
     mkdir -p $containers_d/$1/tmp
     mkdir -p $containers_d/$1/var
     mkdir -p $containers_d/$1/jails
-#    mkdir -p $containers_d/$1/containers
-#    mkdir -p $containers_d/$1/jails/containers
-#    mkdir -p $containers_d/$1/jails/template
 
     echo "Copying /etc /root /home"
     cp -Rp $skeleton_d./etc/   $containers_d/$1/etc/
