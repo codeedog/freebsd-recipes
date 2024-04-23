@@ -165,15 +165,27 @@ process_conf()
 	return
     fi
 
-    # Match: Default Route    (d[=<IP|interface_name>])
-    match=$(echo $arg | sed -n "s/^d=\(.\{1,\}\)\$/\1/p")
-    if [ $arg = "d" ]; then
+    # Match: Default Gateway  (g[=<IP|interface_name>])
+    match=$(echo $arg | sed -n "s/^g=\(.\{1,\}\)\$/\1/p")
+    if [ $arg = "g" ]; then
 	defroute=" EMPTY " #$name
 	echo "  def rt: $defroute"
 	return
     elif [ "_$match" != "_" ]; then
 	defroute=$match
 	echo "  def rt: $defroute"
+	return
+    fi
+
+    # Match: DNS Resolve      (d[=<IP|interface_name>])
+    match=$(echo $arg | sed -n "s/^d=\(.\{1,\}\)\$/\1/p")
+    if [ $arg = "d" ]; then
+	dnsresolv=" EMPTY " #$name
+	echo "  def rt: $dnsresolv"
+	return
+    elif [ "_$match" != "_" ]; then
+	dnsresolv=$match
+	echo "  def rt: $dnsresolv"
 	return
     fi
 
@@ -184,7 +196,7 @@ process_conf()
 process_if()
 {
     local arg match
-    unset name oname num side oppo sufx inet cidr oinet ether bridge defroute
+    unset name oname num side oppo sufx inet cidr oinet ether bridge defroute dnsresolv
 
     # Match interface descriptor: e#<a|b>[_name]
     name="$1"
@@ -291,6 +303,24 @@ jibe_bind()
 	ifconfig "$name" inet "$inet/$cidr" up || echo "  IP/CIDR Failed: $name $inet/$cidr"
     fi
 
+    # Set DNS Resolve to IP or default route (but not interface)
+    if [ "_$dnsresolv" != "" ]; then
+	local dns=$dnsresolv
+	if [ "$dns" = " EMPTY " ]; then
+	    if [ "$cidr" = "31" ]; then
+		dns=$oinet
+	    elif [ "$defroute" != " EMPTY " ]; then
+		dns=$defroute
+	    else
+		dns=""
+	    fi
+	fi
+	if [ "_$dns" != "_" ]; then
+	    echo "echo \"nameserver $dns\" | resolvconf -a \"$name\""
+	    echo "nameserver $dns" | resolvconf -a "$name"
+	fi
+    fi
+    
     # Set default route to IP or interface
     if [ "_$defroute" != "_" ]; then
 	local dfr=$defroute
@@ -320,6 +350,12 @@ jibe_del()
 {
     echo "DEL  $1"
     process_if $@
+
+    # Undo any DNS settings
+    if [ "_$dnsresolv" != "_" ]; then
+	echo "resolvconf -d \"$name\""
+	resolvconf -d "$name"
+    fi
 
     # Destroy created epairs
     echo "  ifconfig \"$name\" destroy > /dev/null 2>&1"
