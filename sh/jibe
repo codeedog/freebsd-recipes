@@ -49,7 +49,7 @@ FAILURE=1
 usage()
 {
     echo "$pgm <pre|bind|del> if_desc1[ if_desc2 [ if_desc3 ...]]"
-    echo "  if_desc# := e#<a|b>[_name][,dhcp|inet <IPv4/CIDR>][,b/<bridge_name>][,<mac_address>][,d[=<IPv4|if>]]"
+    echo "  if_desc# := e#<a|b>[_name][,dhcp|inet <IPv4/CIDR>][,b=<bridge_name>][,<mac_address>][,d[=<IPv4|if>]]"
     echo "From: '$1' $2"
     exit $FAILURE
 }
@@ -276,8 +276,8 @@ jibe_pre()
 	ifconfig "$oname" ether "${ether}:0$oppo" up
     fi
 
-    # Set IP for CIDR=31 remote epair
-    if [ "$cidr" = "31" ]; then
+    # Set IP for CIDR=31 & no bridge remote epair 
+    if [ "$cidr" = "31" -a "_$bridge" = "_" ]; then
 	echo "  ifconfig $oname inet $oinet/$cidr up"
 	ifconfig "$oname" inet "$oinet/$cidr" up
     fi
@@ -294,7 +294,7 @@ jibe_bind()
     echo "  $@"
     process_if $@
 
-    # Fetch IP via DHCP of Set IP/CIDR directly
+    # Fetch IP via DHCP or Set IP/CIDR directly
     if [ "$inet" = "dhcp" ]; then
 	echo "  dhclient $name"
 	dhclient $name || echo "  DHCP failed: $name"
