@@ -232,7 +232,7 @@ $parent_j
   vnet.interface = e0b_\${name};
   exec.prestart+=\"jibe pre  \$e0\";
   exec.start   +=\"jibe bind \$e0\";
-  exec.poststop+=\"jibe del  \$e0\";
+  exec.prestop +=\"jibe del  \$e0\";
 }" > /etc/jail.conf.d/$1.conf
 
 }
